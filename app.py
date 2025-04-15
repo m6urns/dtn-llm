@@ -3,19 +3,48 @@ import os
 import time
 from datetime import datetime
 import json
+import argparse
 
 from queue import RequestQueue
 from web import ConversationManager
 from power_monitor import MockPowerMonitor
-from llm_processor import MockLLMProcessor
+from llm_processor import MockLLMProcessor, LlamaProcessor
 from scheduler import PowerAwareScheduler
 
 app = Flask(__name__)
 
+# Setup command line arguments
+parser = argparse.ArgumentParser(description='Solar-powered LLM system with delay-tolerant networking')
+parser.add_argument('--model', help='Path to GGUF model file for llama.cpp')
+parser.add_argument('--llama-cpp', default='./llama.cpp/main', help='Path to llama.cpp executable')
+parser.add_argument('--use-mock', action='store_true', help='Use mock LLM processor instead of real one')
+args = parser.parse_args()
+
 # Initialize components
 power_monitor = MockPowerMonitor(initial_battery_level=75.0, max_solar_output=30.0)
 request_queue = RequestQueue()
-llm_processor = MockLLMProcessor(power_monitor=power_monitor)
+
+# Initialize LLM processor (mock or real)
+if args.use_mock or not args.model:
+    print("Using mock LLM processor")
+    llm_processor = MockLLMProcessor(power_monitor=power_monitor)
+else:
+    # Check if model file and llama.cpp executable exist
+    if not os.path.exists(args.model):
+        print(f"Error: Model file not found: {args.model}")
+        print("Falling back to mock LLM processor")
+        llm_processor = MockLLMProcessor(power_monitor=power_monitor)
+    elif not os.path.exists(args.llama_cpp):
+        print(f"Error: llama.cpp executable not found: {args.llama_cpp}")
+        print("Falling back to mock LLM processor")
+        llm_processor = MockLLMProcessor(power_monitor=power_monitor)
+    else:
+        print(f"Using llama.cpp with model: {args.model}")
+        llm_processor = LlamaProcessor(
+            model_path=args.model,
+            power_monitor=power_monitor,
+            llama_cpp_path=args.llama_cpp
+        )
 
 # Initialize scheduler with a callback to update conversation pages
 def update_conversation_callback(conversation_id):

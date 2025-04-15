@@ -3,3 +3,6 @@ werkzeug==2.3.8
 pytest==6.2.5
 flake8==3.9.2
 mypy==0.910
+# Additional dependencies for llama.cpp integration
+psutil==5.9.5  # For monitoring system resources
+argparse==1.4.0
