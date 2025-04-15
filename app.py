@@ -6,32 +6,40 @@ import json
 
 from queue import RequestQueue
 from web import ConversationManager
+from power_monitor import MockPowerMonitor
+from llm_processor import MockLLMProcessor
+from scheduler import PowerAwareScheduler
 
 app = Flask(__name__)
 
 # Initialize components
+power_monitor = MockPowerMonitor(initial_battery_level=75.0, max_solar_output=30.0)
 request_queue = RequestQueue()
-conversation_manager = ConversationManager()
+llm_processor = MockLLMProcessor(power_monitor=power_monitor)
 
-# Placeholder for power monitor (to be implemented in Phase 1)
-class MockPowerMonitor:
-    def get_current_status(self):
-        """Mock power status for testing"""
-        return {
-            "battery_level": 75.0,
-            "solar_output": 15.5,
-            "power_consumption": 2.0,
-            "temperature": 25.0,
-            "timestamp": int(time.time())
-        }
+# Initialize scheduler with a callback to update conversation pages
+def update_conversation_callback(conversation_id):
+    """Callback function to update conversation page when a request completes."""
+    if conversation_manager:
+        conversation_manager.update_conversation_page(conversation_id)
 
-power_monitor = MockPowerMonitor()
-conversation_manager.power_monitor = power_monitor
-conversation_manager.request_queue = request_queue
+scheduler = PowerAwareScheduler(
+    power_monitor=power_monitor, 
+    request_queue=request_queue, 
+    llm_processor=llm_processor,
+    callback_fn=update_conversation_callback
+)
+
+# Initialize conversation manager after scheduler to avoid circular references
+conversation_manager = ConversationManager(
+    static_pages_dir="static/conversations",
+    request_queue=request_queue,
+    power_monitor=power_monitor
+)
 
 @app.route('/')
 def index():
-    """Home page with form to start a new conversation"""
+    """Home page with form to start a new conversation."""
     power_status = power_monitor.get_current_status()
     queue_length = request_queue.get_queue_length()
     
@@ -60,22 +68,14 @@ def index():
 
 @app.route('/new', methods=['POST'])
 def new_conversation():
-    """Create a new conversation"""
+    """Create a new conversation."""
     initial_prompt = request.form.get('prompt')
     
     if not initial_prompt:
         return redirect('/')
     
-    # Mock data for testing
-    estimated_time = datetime.now()
-    
-    # Simulate request enqueue
-    request_id = request_queue.enqueue(
-        None,  # No conversation ID yet
-        initial_prompt,
-        2.0,  # Mock power estimate 
-        estimated_time
-    )
+    # Add prompt to scheduler queue
+    request_id, estimated_time = scheduler.enqueue_prompt(None, initial_prompt)
     
     # Create conversation and update the queue with its ID
     conversation_id = conversation_manager.create_new_conversation(
@@ -85,7 +85,6 @@ def new_conversation():
     )
     
     # Update the queue entry with the conversation ID
-    conn = request_queue.db_path
     import sqlite3
     conn = sqlite3.connect(request_queue.db_path)
     cursor = conn.cursor()
@@ -101,7 +100,7 @@ def new_conversation():
 
 @app.route('/conversation/<conversation_id>')
 def view_conversation(conversation_id):
-    """View a conversation"""
+    """View a conversation."""
     # Check if conversation exists
     if not conversation_manager.conversation_exists(conversation_id):
         return "Conversation not found", 404
@@ -111,21 +110,15 @@ def view_conversation(conversation_id):
 
 @app.route('/submit', methods=['POST'])
 def submit_prompt():
-    """Submit a new prompt to an existing conversation"""
+    """Submit a new prompt to an existing conversation."""
     conversation_id = request.form.get('conversation_id')
     prompt = request.form.get('prompt')
     
     if not conversation_id or not prompt:
         return redirect('/')
     
-    # Add prompt to queue with mock estimated time
-    estimated_time = datetime.now()
-    request_id = request_queue.enqueue(
-        conversation_id,
-        prompt,
-        2.0,  # Mock power estimate
-        estimated_time
-    )
+    # Add prompt to scheduler queue
+    request_id, estimated_time = scheduler.enqueue_prompt(conversation_id, prompt)
     
     # Update conversation page
     conversation_manager.update_conversation_page(conversation_id)
@@ -134,20 +127,26 @@ def submit_prompt():
 
 @app.route('/api/status')
 def system_status():
-    """API endpoint for system status"""
+    """API endpoint for system status."""
     power_status = power_monitor.get_current_status()
-    queue_length = request_queue.get_queue_length()
+    queue_status = scheduler.get_queue_status()
     
     return jsonify({
         "battery_level": power_status["battery_level"],
         "solar_output": power_status["solar_output"],
-        "queue_length": queue_length,
+        "queue_length": queue_status["queue_length"],
+        "processing_active": queue_status["processing_active"],
         "timestamp": int(time.time())
     })
 
+@app.route('/api/request/<request_id>')
+def request_status(request_id):
+    """API endpoint for specific request status."""
+    return jsonify(scheduler.get_request_info(request_id))
+
 @app.route('/download/<conversation_id>')
 def download_conversation(conversation_id):
-    """Download conversation as text file"""
+    """Download conversation as text file."""
     requests = request_queue.get_conversation_requests(conversation_id)
     
     text_content = f"Solar LLM Conversation {conversation_id}\n"
@@ -164,6 +163,23 @@ def download_conversation(conversation_id):
         headers={'Content-Disposition': f'attachment;filename=conversation-{conversation_id}.txt'}
     )
     return response
+
+# For testing purposes
+@app.route('/simulate/charge')
+def simulate_charge():
+    """Simulate battery charging."""
+    amount = float(request.args.get('amount', 10))
+    current = power_monitor.battery_level
+    power_monitor.battery_level = min(100, current + amount)
+    return jsonify({"status": "ok", "battery_level": power_monitor.battery_level})
+
+@app.route('/simulate/discharge')
+def simulate_discharge():
+    """Simulate battery discharging."""
+    amount = float(request.args.get('amount', 10))
+    current = power_monitor.battery_level
+    power_monitor.battery_level = max(0, current - amount)
+    return jsonify({"status": "ok", "battery_level": power_monitor.battery_level})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
