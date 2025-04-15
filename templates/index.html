@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Solar LLM</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2em; max-width: 800px; line-height: 1.6; }
+        .battery-status { 
+            height: 20px; 
+            background: linear-gradient(to right, #4CAF50 {{ battery_level }}%, #f0f0f0 0%);
+            margin-bottom: 1em;
+            border-radius: 3px;
+        }
+        .prompt-form {
+            margin: 2em 0;
+            padding: 1em;
+            border-radius: 3px;
+            background: #f0f0f0;
+        }
+        textarea { 
+            width: 100%; 
+            height: 100px; 
+            padding: 0.5em; 
+            font-family: inherit;
+            margin-bottom: 1em; 
+        }
+        button { 
+            padding: 0.5em 1em; 
+            background: #4CAF50; 
+            color: white; 
+            border: none; 
+            border-radius: 3px; 
+        }
+        .status-box {
+            margin: 1em 0;
+            padding: 1em;
+            background: #e1f5fe;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Solar-Powered LLM</h1>
+    
+    <div class="battery-status" title="Battery level: {{ battery_level }}%"></div>
+    
+    <div class="status-box">
+        <h3>System Status</h3>
+        <p>Current solar output: {{ solar_output|round(2) }}W</p>
+        <p>Battery level: {{ battery_level|round(1) }}%</p>
+        <p>Queue length: {{ queue_length }}</p>
+    </div>
+    
+    <div class="prompt-form">
+        <h3>Start a new conversation</h3>
+        <form action="/new" method="post">
+            <textarea name="prompt" placeholder="Enter your prompt..."></textarea>
+            <button type="submit">Submit</button>
+        </form>
+    </div>
+    
+    {% if recent_conversations %}
+    <div>
+        <h3>Recent Conversations</h3>
+        <ul>
+            {% for id, time in recent_conversations %}
+            <li><a href="/conversation/{{ id }}">Conversation from {{ time }}</a></li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</body>
+</html>
