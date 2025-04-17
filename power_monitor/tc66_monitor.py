@@ -55,6 +55,9 @@ class TC66PowerMonitor(BasePowerMonitor):
         self.last_reading_time = 0
         self.power_reading_cache_time = power_reading_cache_time
         
+        # Store battery level for fallback when readings fail
+        self.stored_battery_level = initial_battery_level
+        
         # Try initial connection
         self.connect()
 
@@ -223,26 +226,50 @@ class TC66PowerMonitor(BasePowerMonitor):
         
         # Fallback if reading failed
         if self.last_reading is not None:
-            # Use last successful reading but with updated timestamp
+            # Use last successful reading but with updated timestamp and consumption
             fallback = self.last_reading.copy()
             fallback["timestamp"] = int(current_time)
+            
+            # Update consumption based on current processing state
+            fallback["consumption"] = self.base_consumption if not self.is_processing else 5.0
+            
+            # Make sure power (solar output) is maintained from the last reading
+            # We don't want it to drop to zero during processing
+            if fallback["power"] < 0.1:
+                # If last reading had zero power, use time-based estimate
+                fallback["power"] = self.estimate_solar_output_for_hour(datetime.now().hour)
+                
+            logger.info(f"Using cached power reading: power={fallback['power']:.2f}W, battery={self.battery_level:.1f}%")
             return fallback
         else:
-            # No previous reading, use mock values
-            return {
+            # No previous reading, use reasonable defaults based on time of day
+            solar_output = self.estimate_solar_output_for_hour(datetime.now().hour)
+            mock_reading = {
                 "timestamp": int(current_time),
                 "voltage": 3.7 + (self.battery_level / 100 * 0.8),  # 3.7-4.5V range
                 "current": 1.0 if self.is_processing else 0.4,
-                "power": self.estimate_solar_output_for_hour(datetime.now().hour),
+                "power": solar_output,
                 "consumption": self.base_consumption if not self.is_processing else 5.0,
                 "temperature": 25.0
             }
+            logger.info(f"Using default power values: power={solar_output:.2f}W, battery={self.battery_level:.1f}%")
+            return mock_reading
     
     def estimate_battery_level(self) -> float:
         """Estimate battery level based on voltage and usage history."""
         # Get current reading
         reading = self.get_current_power_reading()
         voltage = reading["voltage"]
+        
+        # Check if voltage seems too low (could be a failed reading)
+        if voltage < 0.1:
+            # If we have a known battery level, just return that
+            if hasattr(self, 'stored_battery_level') and self.stored_battery_level > 0:
+                return self.stored_battery_level
+            
+            # Otherwise default to 75% to allow operations
+            logger.warning("Voltage reading is zero, using default battery level of 75%")
+            return 75.0
         
         # Simple voltage-based estimation
         # 3.3V (0%) to 4.2V (100%) for a typical Li-ion cell
@@ -255,14 +282,26 @@ class TC66PowerMonitor(BasePowerMonitor):
         # Calculate percentage
         percentage = (clamped_voltage - min_voltage) / (max_voltage - min_voltage) * 100
         
+        # Store for future fallback
+        self.stored_battery_level = round(percentage, 1)
+        
         # Return rounded value
-        return round(percentage, 1)
+        return self.stored_battery_level
     
     def get_solar_output(self) -> float:
         """Get current solar panel output in Watts."""
         # The power reading from TC66 is the current solar output
         reading = self.get_current_power_reading()
-        return reading["power"]
+        solar_output = reading["power"]
+        
+        # If power is zero or very low (possibly due to reading error)
+        # use our time-based estimate instead
+        if solar_output < 0.1:
+            estimated_output = self.estimate_solar_output_for_hour(datetime.now().hour)
+            logger.warning(f"Zero solar reading detected, using estimate of {estimated_output:.2f}W")
+            return estimated_output
+            
+        return solar_output
     
     def estimate_solar_output_for_hour(self, hour: int) -> float:
         """Estimate solar output for a specific hour based on history."""
