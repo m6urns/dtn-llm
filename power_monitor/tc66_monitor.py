@@ -145,6 +145,9 @@ class TC66PowerMonitor(BasePowerMonitor):
         if (self.last_reading is not None and 
             current_time - self.last_reading_time < self.power_reading_cache_time):
             return self.last_reading
+        
+        # Variable to track if we need to attempt reconnection
+        reconnect_needed = False
             
         try:
             # Try to read data from TC66
@@ -177,8 +180,46 @@ class TC66PowerMonitor(BasePowerMonitor):
                 return reading
             else:
                 logger.warning("Failed to read data from TC66, using fallback values")
+                reconnect_needed = True
         except Exception as e:
             logger.error(f"Error reading from TC66: {e}")
+            reconnect_needed = True
+        
+        # Try to reconnect if reading failed due to port issues
+        if reconnect_needed:
+            # Close existing connection first
+            try:
+                if self.tc66.serial and self.tc66.serial.isOpen():
+                    self.tc66.disconnect()
+                    time.sleep(0.5)  # Short delay before reconnecting
+                
+                # Attempt to reconnect
+                logger.info("Attempting to reconnect to TC66 device...")
+                if self.tc66.connect():
+                    logger.info("Successfully reconnected to TC66 device")
+                    
+                    # Try reading again after reconnection
+                    try:
+                        data = self.tc66.read_data()
+                        if data is not None:
+                            reading = {
+                                "timestamp": int(current_time),
+                                "voltage": data["voltage"],
+                                "current": data["current"],
+                                "power": data["power"],
+                                "consumption": self.base_consumption if not self.is_processing else 5.0,
+                                "temperature": data["temperature"]
+                            }
+                            
+                            # Update cache
+                            self.last_reading = reading
+                            self.last_reading_time = current_time
+                            
+                            return reading
+                    except Exception as e:
+                        logger.error(f"Error reading after reconnection: {e}")
+            except Exception as e:
+                logger.error(f"Error during reconnection attempt: {e}")
         
         # Fallback if reading failed
         if self.last_reading is not None:
@@ -313,3 +354,23 @@ class TC66PowerMonitor(BasePowerMonitor):
     def set_processing_state(self, is_processing: bool) -> None:
         """Set whether the system is currently processing a request."""
         self.is_processing = is_processing
+        
+    def simulate_battery_change(self, elapsed_time: Union[int, float], power_used: float) -> None:
+        """Simulate battery discharge based on time elapsed and power used.
+        
+        This method is called by the LlamaProcessor after generation to account for power usage.
+        Since we're using real hardware monitoring, we don't actually modify the battery level
+        directly, but we can use this to log power usage information.
+        
+        Args:
+            elapsed_time: Time in seconds
+            power_used: Power used in Watts
+        """
+        # Calculate energy used in Watt-hours
+        energy_used = power_used * (elapsed_time / 3600)
+        
+        # Log the information
+        logger.info(f"Power usage logged: {energy_used:.4f} Wh ({power_used:.2f}W for {elapsed_time:.2f}s)")
+        
+        # For compatibility with MockPowerMonitor, we don't actually change the battery level
+        # as our readings come directly from hardware

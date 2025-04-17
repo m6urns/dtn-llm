@@ -46,16 +46,43 @@ class TC66Monitor:
         
     def read_data(self):
         """Read and decode data from the device"""
+        # First check if we have a valid serial connection
+        if not self.serial or not self.serial.isOpen():
+            if not self.connect():
+                return None
+                
+        # Send the command to get data
         if not self.send_command("getva"):
             return None
             
-        # Read 192 bytes as per the original code
-        data = self.serial.read(192)
-        if len(data) < 192:
-            print(f"Incomplete data received: {len(data)} bytes")
+        try:
+            # Read 192 bytes as per the original code
+            data = self.serial.read(192)
+            if len(data) < 192:
+                print(f"Incomplete data received: {len(data)} bytes")
+                return None
+                
+            return self.decode_response(data)
+        except Exception as e:
+            print(f"Error reading data from serial port: {e}")
+            # Try to disconnect and then reconnect
+            self.disconnect()
+            if self.connect():
+                try:
+                    if not self.send_command("getva"):
+                        return None
+                    
+                    # Try reading again
+                    data = self.serial.read(192)
+                    if len(data) < 192:
+                        print(f"Still incomplete data after reconnection: {len(data)} bytes")
+                        return None
+                        
+                    return self.decode_response(data)
+                except Exception as e2:
+                    print(f"Error reading data after reconnection: {e2}")
+                    
             return None
-            
-        return self.decode_response(data)
         
     def decode_response(self, data):
         """Decrypt and decode the response"""
