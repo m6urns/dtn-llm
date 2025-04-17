@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
@@ -20,7 +21,8 @@ class PowerAwareScheduler:
                  power_monitor: BasePowerMonitor, 
                  request_queue: RequestQueue, 
                  llm_processor: BaseLLMProcessor,
-                 callback_fn: Optional[Callable[[str], None]] = None):
+                 callback_fn: Optional[Callable[[str], None]] = None,
+                 immediate_mode: bool = False):
         """Initialize the power-aware scheduler.
         
         Args:
@@ -28,6 +30,7 @@ class PowerAwareScheduler:
             request_queue: Request queue instance
             llm_processor: LLM processor instance
             callback_fn: Optional callback function when a request completes
+            immediate_mode: Process prompts immediately without waiting for scheduled time
         """
         self.power_monitor = power_monitor
         self.request_queue = request_queue
@@ -35,6 +38,7 @@ class PowerAwareScheduler:
         self.callback_fn = callback_fn
         self.processing = False
         self.stop_processing = False
+        self.immediate_mode = immediate_mode
         self.power_calibration_data = self.load_power_calibration_data()
         
     def load_power_calibration_data(self) -> Dict[str, float]:
@@ -118,30 +122,35 @@ class PowerAwareScheduler:
         power_needed = self.estimate_power_requirement(token_count)
         processing_time = self.estimate_processing_time(token_count)
         
-        # Get power prediction for coming hours
-        power_prediction = self.power_monitor.predict_future_availability(24)
-        
         # Calculate estimated completion time
         now = datetime.now()
         queue_delay = timedelta(seconds=60 * self.request_queue.get_queue_length())
         
-        # Default to a far future time
-        estimated_completion = now + timedelta(hours=24)
-        
-        # Find earliest time when power will be sufficient
-        for i, prediction in enumerate(power_prediction):
-            if prediction["processing_capable"] and power_needed <= prediction["solar_output"]:
-                hour_delay = timedelta(hours=i)
-                process_delay = timedelta(seconds=processing_time)
-                candidate_time = now + hour_delay + process_delay + queue_delay
-                
-                # Take the earliest time
-                if candidate_time < estimated_completion:
-                    estimated_completion = candidate_time
-                
-                # If we found a time within the next few hours, we can stop looking
-                if i < 6:  # Within 6 hours
-                    break
+        # In immediate mode, just use a short delay (current time + processing time)
+        if self.immediate_mode:
+            process_delay = timedelta(seconds=processing_time)
+            estimated_completion = now + process_delay + queue_delay
+        else:
+            # Get power prediction for coming hours
+            power_prediction = self.power_monitor.predict_future_availability(24)
+            
+            # Default to a far future time
+            estimated_completion = now + timedelta(hours=24)
+            
+            # Find earliest time when power will be sufficient
+            for i, prediction in enumerate(power_prediction):
+                if prediction["processing_capable"] and power_needed <= prediction["solar_output"]:
+                    hour_delay = timedelta(hours=i)
+                    process_delay = timedelta(seconds=processing_time)
+                    candidate_time = now + hour_delay + process_delay + queue_delay
+                    
+                    # Take the earliest time
+                    if candidate_time < estimated_completion:
+                        estimated_completion = candidate_time
+                    
+                    # If we found a time within the next few hours, we can stop looking
+                    if i < 6:  # Within 6 hours
+                        break
         
         # Add to queue
         request_id = self.request_queue.enqueue(
@@ -171,18 +180,25 @@ class PowerAwareScheduler:
     def process_queue_loop(self) -> None:
         """Main loop for processing queued requests."""
         self.processing = True
+        print(f"[DEBUG] Scheduler: Starting queue processing loop in {'immediate' if self.immediate_mode else 'normal'} mode")
         
         while not self.stop_processing:
             # Check current power availability
             power_status = self.power_monitor.get_current_status()
             available_power = power_status["solar_output"]
+            print(f"[DEBUG] Scheduler: Power status - battery: {power_status['battery_level']:.2f}%, solar: {available_power:.2f}W")
             
+            # In immediate mode, we process if battery > 30%, regardless of solar output
+            # In normal mode, we need both battery > 30% and sufficient solar power
             if power_status["battery_level"] > 30:
                 # Get next request that can be processed with available power
-                next_request = self.request_queue.get_next_processable_request(available_power)
+                print(f"[DEBUG] Scheduler: Looking for next processable request (immediate_mode={self.immediate_mode})")
+                next_request = self.request_queue.get_next_processable_request(available_power, self.immediate_mode)
                 
                 if next_request:
                     # Update status to processing
+                    print(f"[DEBUG] Scheduler: Processing request id={next_request['id']}, conversation_id={next_request['conversation_id']}")
+                    print(f"[DEBUG] Scheduler: Prompt: {next_request['prompt'][:50]}...")
                     self.request_queue.update_request_status(next_request["id"], "processing")
                     
                     # Process the request
@@ -191,12 +207,15 @@ class PowerAwareScheduler:
                         initial_power = self.power_monitor.get_current_power_reading()
                         initial_time = time.time()
                         
+                        print("[DEBUG] Scheduler: Calling LLM processor to generate response")
                         # Generate response
                         response = self.llm_processor.generate_response(next_request["prompt"])
                         
                         # Record final power usage
                         final_power = self.power_monitor.get_current_power_reading()
                         final_time = time.time()
+                        
+                        print(f"[DEBUG] Scheduler: Response generation completed in {final_time - initial_time:.2f} seconds")
                         
                         # Update power calibration data
                         self.update_power_calibration(
@@ -209,6 +228,7 @@ class PowerAwareScheduler:
                         )
                         
                         # Update request status to completed
+                        print(f"[DEBUG] Scheduler: Updating request status to completed")
                         self.request_queue.update_request_status(
                             next_request["id"], 
                             "completed", 
@@ -218,25 +238,49 @@ class PowerAwareScheduler:
                         # Call callback function if provided
                         if self.callback_fn:
                             try:
-                                self.callback_fn(next_request["conversation_id"])
+                                # Check if we have a valid conversation_id
+                                conversation_id = next_request.get("conversation_id")
+                                if conversation_id and conversation_id != "None":
+                                    print(f"[DEBUG] Scheduler: Calling callback for conversation_id={conversation_id}")
+                                    self.callback_fn(conversation_id)
+                                else:
+                                    print(f"[DEBUG] Scheduler: No valid conversation_id found, response won't be displayed")
+                                    # Try updating the UI for recent requests
+                                    conn = sqlite3.connect(self.request_queue.db_path)
+                                    conn.row_factory = sqlite3.Row
+                                    cursor = conn.cursor()
+                                    cursor.execute('SELECT conversation_id FROM requests WHERE id = ?', (next_request["id"],))
+                                    row = cursor.fetchone()
+                                    if row and row['conversation_id'] and row['conversation_id'] != "None":
+                                        print(f"[DEBUG] Scheduler: Found updated conversation_id={row['conversation_id']}, updating page")
+                                        self.callback_fn(row['conversation_id'])
+                                    conn.close()
                             except Exception as e:
-                                print(f"Error in callback: {e}")
+                                print(f"[DEBUG] Error in callback: {e}")
                         
                     except Exception as e:
-                        print(f"Error processing request: {e}")
+                        print(f"[DEBUG] Error processing request: {e}")
+                        import traceback
+                        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
                         self.request_queue.update_request_status(next_request["id"], "failed")
                 else:
                     # No processable requests, sleep
+                    print("[DEBUG] Scheduler: No processable requests found, sleeping")
                     time.sleep(10)
             else:
                 # Battery too low, sleep
+                print(f"[DEBUG] Scheduler: Battery level too low ({power_status['battery_level']:.2f}%), sleeping")
                 time.sleep(30)
             
             # Check if queue is empty and no active processing
-            if self.request_queue.get_queue_length() == 0:
+            queue_length = self.request_queue.get_queue_length()
+            print(f"[DEBUG] Scheduler: Current queue length: {queue_length}")
+            if queue_length == 0:
+                print("[DEBUG] Scheduler: Queue empty, stopping processing loop")
                 break
                 
         self.processing = False
+        print("[DEBUG] Scheduler: Processing loop stopped")
     
     def update_power_calibration(self, 
                                 initial_power: Dict[str, Any], 

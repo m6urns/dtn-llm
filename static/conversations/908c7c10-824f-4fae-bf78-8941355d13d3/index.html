@@ -1,0 +1,76 @@
+
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Solar LLM Conversation</title>
+            <style>
+                body { font-family: system-ui, sans-serif; margin: 2em; max-width: 800px; line-height: 1.6; }
+                .battery-status { 
+                    height: 20px; 
+                    background: linear-gradient(to right, #4CAF50 74.87169372247862%, #f0f0f0 0%);
+                    margin-bottom: 1em;
+                    border-radius: 3px;
+                }
+                .prompt, .response, .status {
+                    margin: 1em 0;
+                    padding: 1em;
+                    border-radius: 3px;
+                }
+                .prompt { background: #f0f0f0; }
+                .response { background: #e1f5fe; }
+                .status { background: #fff8e1; }
+                form { margin: 2em 0; }
+                textarea { width: 100%; height: 100px; padding: 0.5em; font-family: inherit; }
+                button { padding: 0.5em 1em; background: #4CAF50; color: white; border: none; border-radius: 3px; }
+            </style>
+        </head>
+        <body>
+            <h1>Solar LLM Conversation</h1>
+            <div class="battery-status" title="Battery level: 74.87169372247862%"></div>
+            
+            <div class="power-info">
+                <p>Current solar output: 10.00W</p>
+                <p>Battery level: 74.9%</p>
+            </div>
+        
+            <div class="prompt">
+                <p><strong>You:</strong> What is the meaning of life?</p>
+            </div>
+            
+                <div class="response">
+                    <p><strong>AI:</strong> This question has been asked many times throughout history by philosophers, religious figures and ordinary people alike. There are countless theories and beliefs about the meaning of life, but ultimately it is a deeply personal and subjective question that each individual must answer for themselves. Some may believe that the meaning of life is to seek happiness and fulfillment, while others may believe that it is to serve a higher power or to contribute to the greater good of humanity. Ultimately, the meaning of life is a mystery that each person must explore for themselves.</p>
+                </div>
+                
+            <div class="prompt">
+                <p><strong>You:</strong> Someone told me it was 42 is that true?</p>
+            </div>
+            
+                <div class="response">
+                    <p><strong>AI:</strong> I don't know the context of this statement, but there are a few things to consider. "42" could refer to:
+- The answer to the ultimate question of life, the universe, and everything, according to Douglas Adams' fictional works.
+- The name of a programming language developed by Donald Knuth.
+- A term used in various games, including chess and bridge, to describe a specific move or strategy.
+
+Without more context, it's difficult to determine which of these (if any) the statement is referring to. If you can provide more information, I may be able to help further.</p>
+                </div>
+                
+            <div class="prompt">
+                <p><strong>You:</strong> Do you have history from our previous chat?</p>
+            </div>
+            
+                <div class="response">
+                    <p><strong>AI:</strong> If so, please share what has happened.
+Otherwise, let's start a new conversation.</p>
+                </div>
+                
+            <form action="/submit" method="post">
+                <input type="hidden" name="conversation_id" value="908c7c10-824f-4fae-bf78-8941355d13d3">
+                <textarea name="prompt" placeholder="Enter your next prompt..."></textarea>
+                <button type="submit">Submit</button>
+            </form>
+            
+            <p><a href="/">Return to home page</a></p>
+            <p><a href="/download/{conversation_id}">Download conversation</a></p>
+        </body>
+        </html>
+        

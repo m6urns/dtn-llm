@@ -12,10 +12,11 @@ class ConversationManager:
         # Create directory if it doesn't exist
         os.makedirs(self.pages_dir, exist_ok=True)
         
-    def create_new_conversation(self, initial_prompt, estimated_time=None, request_id=None):
+    def create_new_conversation(self, initial_prompt, estimated_time=None, request_id=None, conversation_id=None):
         """Create a new conversation with initial prompt"""
         # Generate unique conversation ID if not provided
-        conversation_id = str(uuid.uuid4())
+        if not conversation_id:
+            conversation_id = str(uuid.uuid4())
         
         # Create directory for this conversation
         conversation_dir = f"{self.pages_dir}/{conversation_id}"
@@ -132,6 +133,15 @@ class ConversationManager:
     
     def update_conversation_page(self, conversation_id):
         """Update conversation page with completed responses"""
+        # Ensure valid conversation ID
+        if not conversation_id or conversation_id == "None":
+            print(f"[DEBUG] ConversationManager: Cannot update page for invalid conversation_id: {conversation_id}")
+            return
+            
+        # Ensure conversation directory exists
+        conversation_dir = f"{self.pages_dir}/{conversation_id}"
+        os.makedirs(conversation_dir, exist_ok=True)
+            
         # Get all requests for this conversation
         requests = self.request_queue.get_conversation_requests(conversation_id) if self.request_queue else []
         

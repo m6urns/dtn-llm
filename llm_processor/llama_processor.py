@@ -40,10 +40,18 @@ class LlamaProcessor(BaseLLMProcessor):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
 
-        # Check if llama.cpp executable exists
+        # Check if llama.cpp executable exists and is executable
         if not os.path.exists(llama_cpp_path):
             raise FileNotFoundError(
-                f"llama.cpp executable not found: {llama_cpp_path}"
+                f"llama.cpp executable not found: {llama_cpp_path}. "
+                f"Make sure to provide the path to the compiled binary (usually named 'main')."
+            )
+        
+        # Check if it's actually executable
+        if not os.access(llama_cpp_path, os.X_OK):
+            raise PermissionError(
+                f"File exists but is not executable: {llama_cpp_path}. "
+                f"Make sure you're pointing to the compiled binary, not a source file."
             )
 
     def generate_response(
@@ -69,9 +77,14 @@ class LlamaProcessor(BaseLLMProcessor):
         process = None
 
         try:
+            print(f"[DEBUG] LlamaProcessor: Starting to process prompt: {prompt[:30]}...")
+            print(f"[DEBUG] LlamaProcessor: Model path: {self.model_path}")
+            print(f"[DEBUG] LlamaProcessor: Llama.cpp path: {self.llama_cpp_path}")
+            
             # Start power monitoring if available
             if self.power_monitor:
                 self.power_monitor.set_processing_state(True)
+                print(f"[DEBUG] Power status: {self.power_monitor.get_current_status()}")
 
             # Start time for measuring duration
             start_time = time.time()
@@ -87,6 +100,8 @@ class LlamaProcessor(BaseLLMProcessor):
                 # Disable memory mapping for predictable power usage
                 "--no-mmap"
             ]
+            
+            print(f"[DEBUG] Executing command: {' '.join(cmd)}")
 
             # Start llama.cpp process
             process = subprocess.Popen(
@@ -109,8 +124,26 @@ class LlamaProcessor(BaseLLMProcessor):
 
             # Collect output
             output = ""
+            print("[DEBUG] Reading output from llama.cpp...")
             for line in process.stdout:
                 output += line
+                print(f"[DEBUG] llama.cpp output: {line.strip()}")
+
+            # Read from stderr in a non-blocking way
+            from fcntl import fcntl, F_GETFL, F_SETFL
+            import os
+            
+            # Set stderr to non-blocking mode
+            flags = fcntl(process.stderr, F_GETFL)
+            fcntl(process.stderr, F_SETFL, flags | os.O_NONBLOCK)
+            
+            # Try to read any stderr output
+            try:
+                stderr_output = process.stderr.read()
+                if stderr_output:
+                    print(f"[DEBUG] llama.cpp stderr: {stderr_output}")
+            except Exception as e:
+                print(f"[DEBUG] Error reading stderr: {e}")
 
             # Stop power monitoring thread
             if self.power_monitor:
@@ -118,32 +151,55 @@ class LlamaProcessor(BaseLLMProcessor):
                 power_thread.join(timeout=2)
 
             # Wait for process to complete
-            process.wait()
+            returncode = process.wait()
+            print(f"[DEBUG] llama.cpp process completed with return code: {returncode}")
 
             # End time for measuring duration
             end_time = time.time()
+            processing_duration = end_time - start_time
+            print(f"[DEBUG] Processing took {processing_duration:.2f} seconds")
 
             # Calculate power used
             if self.power_monitor:
-                duration = end_time - start_time
                 # Simulate battery discharge (5W power draw during processing)
-                self.power_monitor.simulate_battery_change(duration, 5.0)
+                self.power_monitor.simulate_battery_change(processing_duration, 5.0)
+                print(f"[DEBUG] Updated battery level: {self.power_monitor.estimate_battery_level():.2f}%")
 
             # Clean up the output - remove prompt and llama.cpp formatting
             response = self._clean_response(output, prompt)
+            print(f"[DEBUG] Generated response: {response[:100]}...")
 
             return response
 
         except Exception as e:
             # Clean up in case of error
+            print(f"[DEBUG] Error in LlamaProcessor: {str(e)}")
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+            
             if process and process.poll() is None:
                 try:
                     process.terminate()
                     process.wait(timeout=5)
-                except Exception:
+                    print("[DEBUG] Process terminated")
+                except Exception as term_e:
+                    print(f"[DEBUG] Error terminating process: {term_e}")
                     process.kill()
+                    print("[DEBUG] Process killed")
 
-            return f"Error generating response: {e}"
+            error_message = f"Error generating response with llama.cpp: {e}"
+            
+            # Add helpful information to the error message
+            if "[Errno 8] Exec format error" in str(e):
+                error_message += "\n\nThis error usually means the file exists but is not an executable binary."
+                error_message += "\nMake sure you're using the 'main' executable from llama.cpp, not the source code file."
+                error_message += "\nTry running with: --llama-cpp /home/matt/projects/llama.cpp/main"
+            elif "No such file or directory" in str(e):
+                error_message += "\n\nThe executable file was not found. Check the path."
+            elif "Permission denied" in str(e):
+                error_message += "\n\nThe file exists but cannot be executed. Try: chmod +x [path-to-executable]"
+                
+            return error_message
 
         finally:
             # Always reset processing state

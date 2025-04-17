@@ -32,13 +32,20 @@ class MockPowerMonitor(BasePowerMonitor):
         """Get simulated power readings."""
         current_hour = datetime.now().hour
         
+        # Force a minimum non-zero solar output for debugging purposes
+        min_solar_output = 10.0
+        
         # Simulate solar output based on time of day
         if 6 <= current_hour <= 18:  # Daylight hours
             hour_factor = 1 - abs((current_hour - 12) / 6)  # 0 to 1, peaking at noon
             cloud_factor = random.uniform(0.7, 1.0)  # Random cloud cover
             solar_output = self.max_solar_output * hour_factor * cloud_factor
         else:
-            solar_output = 0  # Night time
+            # Even at night, maintain minimum output for testing
+            solar_output = min_solar_output
+            
+        # Ensure we have at least the minimum output
+        solar_output = max(solar_output, min_solar_output)
             
         # Calculate simulated consumption
         power_consumption = self.processing_consumption if self.is_processing else self.base_consumption
