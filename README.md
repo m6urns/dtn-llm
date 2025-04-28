@@ -222,11 +222,3 @@ The application provides the following API endpoints:
 5. **Processing**: When sufficient power is available, the LLM generates responses
 6. **Static Page Generation**: Results are stored as static HTML for offline access
 7. **Power Calibration**: System learns from actual power usage to improve estimates
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-[MIT License](LICENSE)
